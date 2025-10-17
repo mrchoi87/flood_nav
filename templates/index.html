@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>침수 회피 내비</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='styles.css') }}"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+      /* 모바일 최적화 CSS */
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: sans-serif;
+        display: flex;
+        flex-direction: column; /* 세로 방향으로 요소 배치 */
+        height: 100vh;
+      }
+      h1 {
+        text-align: center;
+        margin: 10px 0;
+        font-size: 1.2em; /* 모바일에서 너무 크지 않게 */
+      }
+      #map {
+        flex-grow: 1; /* 지도가 남은 공간을 모두 차지하도록 */
+        height: 60vh; /* 지도에 뷰포트 높이의 60% 할당 */
+        min-height: 300px; /* 최소 높이 보장 */
+        width: 100%;
+      }
+      #controls {
+        padding: 5px;
+        display: flex;
+        flex-wrap: wrap; /* 버튼이 넘치면 다음 줄로 */
+        gap: 5px; /* 버튼 사이 간격 */
+        justify-content: center;
+      }
+      #controls button {
+        flex-grow: 1;
+        padding: 10px 5px; /* 터치 영역 확대 */
+        font-size: 0.9em;
+        min-width: 45%; /* 한 줄에 두 개씩 배치되도록 최소 너비 설정 */
+      }
+      #info {
+        text-align: center;
+        padding: 5px;
+        font-size: 0.9em;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>침수 회피 내비</h1>
+    <div id="map"></div>
+
+    <div id="controls">
+      <button id="toggleNodes">노드 표시/숨김</button>
+      <button id="setStart">출발지 선택</button>
+      <button id="setEnd">도착지 선택</button>
+      <button id="startDrawFlood">침수지역 그리기 시작</button>
+      <button id="endDrawFlood">침수지역 그리기 종료</button>
+      <button id="calculateRoute">경로 계산</button>
+    </div>
+
+    <p id="info">버튼을 눌러 출발지, 도착지, 또는 침수지역을 선택하세요.</p>
+
+    <script>
+        const nodes = {{nodes_json|tojson|safe}};
+        const fnodes = {{fnodes_json|tojson|safe}};
+
+        console.log(nodes);
+        console.log(fnodes);
+
+      //   let map = L.map('map').setView([37.5665, 126.9780], 13);
+        let map = L.map('map').setView([37.269043, 127.152716], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+
+        // ---------------- 노드 표시 ----------------
+        let nodeMarkers = [];
+        let showNodes = false;
+        document.getElementById('toggleNodes').onclick = function() {
+            if (showNodes) {
+                nodeMarkers.forEach(m => map.removeLayer(m));
+                nodeMarkers = [];
+            } else {
+                nodes.forEach(n => {
+                    let m = L.circleMarker(n, { radius: 3, color: 'green', fillColor:'green', fillOpacity:0.7 }).addTo(map);
+                    nodeMarkers.push(m);
+                });
+                fnodes.forEach(n => {
+                    let m = L.circleMarker(n, { radius: 5, color: 'red', fillColor:'red', fillOpacity:0.7 }).addTo(map);
+                    nodeMarkers.push(m);
+                });
+            }
+            showNodes = !showNodes;
+        };
+
+        // ---------------- 출발지/도착지 선택 ----------------
+        let selectingStart = false;
+        let selectingEnd = false;
+        let startPoint = null;
+        let endPoint = null;
+
+        document.getElementById('setStart').onclick = function() {
+            selectingStart = true; selectingEnd = false; drawingFlood=false;
+            document.getElementById('info').innerText = "지도에서 출발지를 클릭하세요.";
+        };
+        document.getElementById('setEnd').onclick = function() {
+            selectingStart = false; selectingEnd = true; drawingFlood=false;
+            document.getElementById('info').innerText = "지도에서 도착지를 클릭하세요.";
+        };
+
+        // ---------------- 침수지역 그리기 ----------------
+        let drawingFlood = false;
+        let floodDrawPoints = [];
+        let floodLine = null;
+        let floodLayers = [];
+
+        document.getElementById('startDrawFlood').onclick = function() {
+            drawingFlood = true;
+            floodDrawPoints = [];
+            if (floodLine) { map.removeLayer(floodLine); floodLine=null; }
+            selectingStart = false; selectingEnd = false;
+            document.getElementById('info').innerText = "지도 클릭하여 다각형 그리기. 끝내기 버튼으로 완료.";
+        };
+
+        document.getElementById('endDrawFlood').onclick = function() {
+            if (!drawingFlood || floodDrawPoints.length < 3) {
+                alert("점이 3개 이상이어야 합니다.");
+                return;
+            }
+            floodLayers.push(L.polygon(floodDrawPoints, {color:'red', fillOpacity:0.3}).addTo(map));
+            fetch('/add_flood', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify(floodDrawPoints)
+            })
+            .then(res => res.json())
+            .then(data => {
+              if (data.status === 'success') {
+                  document.getElementById('info').innerText = "침수지역 추가 완료.";
+              } else {
+                  document.getElementById('info').innerText = "침수지역 추가 실패: " + data.error;
+              }
+            })
+            .catch(err => {
+              document.getElementById('info').innerText = "서버와 통신 중 오류 발생.";
+            });
+
+            floodDrawPoints = [];
+            if (floodLine) { map.removeLayer(floodLine); floodLine=null; }
+            drawingFlood = false;
+        };
+
+        // 클릭 이벤트
+        map.on('click', function(e){
+            if (drawingFlood) {
+                floodDrawPoints.push([e.latlng.lat, e.latlng.lng]);
+                if (floodDrawPoints.length > 1) {
+                    if (floodLine) map.removeLayer(floodLine);
+                    // 모바일 환경에서 Polyline 대신 Polygon을 계속 업데이트하여 영역을 미리 보여줍니다.
+                    floodLine = L.polygon(floodDrawPoints, {color:'blue', fillOpacity:0.3}).addTo(map);
+                }
+            } else if (selectingStart) {
+                if (startPoint) map.removeLayer(startPoint.marker);
+                startPoint = { latlng: e.latlng };
+                startPoint.marker = L.marker(e.latlng, {title:"출발지"}).addTo(map).bindPopup("출발지").openPopup();
+                selectingStart = false;
+                document.getElementById('info').innerText = "출발지 선택 완료.";
+            } else if (selectingEnd) {
+                if (endPoint) map.removeLayer(endPoint.marker);
+                endPoint = { latlng: e.latlng };
+                endPoint.marker = L.marker(e.latlng, {title:"도착지"}).addTo(map).bindPopup("도착지").openPopup();
+                selectingEnd = false;
+                document.getElementById('info').innerText = "도착지 선택 완료.";
+            }
+        });
+
+        // ---------------- 경로 계산 ----------------
+        let routeLine = null;
+        document.getElementById('calculateRoute').onclick = function() {
+            if (!startPoint || !endPoint) {
+                alert("출발지와 도착지를 선택하세요.");
+                return;
+            }
+
+            document.getElementById('info').innerText = "경로를 계산 중입니다..."; // 로딩 상태 표시
+
+            fetch('/calculate', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({start:[startPoint.latlng.lat, startPoint.latlng.lng], end:[endPoint.latlng.lat, endPoint.latlng.lng]})
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    console.error("서버 에러:", data.error);
+                    document.getElementById('info').innerText = "경로 계산 실패: " + data.error;
+                    alert("경로 계산 실패: " + data.error);
+                    return;
+                }
+
+                if (routeLine) map.removeLayer(routeLine);
+                routeLine = L.polyline(data.route, {color:'blue'}).addTo(map);
+                document.getElementById('info').innerText = "경로 계산 완료."; // 성공 상태 표시
+            })
+            .catch(err => {
+                console.error("Fetch 오류:", err);
+                document.getElementById('info').innerText = "서버와 통신 중 오류가 발생했습니다.";
+                alert("서버와 통신 중 오류가 발생했습니다.");
+            });
+        };
+
+
+        let userLocationMarker = null;
+
+      function onLocationFound(e) {
+          const lat = e.coords.latitude;
+          const lng = e.coords.longitude;
+          const accuracy = e.coords.accuracy;
+          const latlng = [lat, lng];
+
+          if (userLocationMarker) {
+              map.removeLayer(userLocationMarker);
+          }
+
+          userLocationMarker = L.circleMarker(latlng, {
+              radius: 8,
+              color: 'blue',
+              fillColor: '#00BFFF',
+              fillOpacity: 0.8
+          }).addTo(map)
+            .bindPopup("현재 위치 (정확도: " + Math.round(accuracy) + "m)").openPopup();
+
+          document.getElementById('info').innerText = `현재 위치 확인됨: 위도 ${lat.toFixed(4)}, 경도 ${lng.toFixed(4)}`;
+      }
+
+      function onLocationError(err) {
+          document.getElementById('info').innerText = `위치 추적 오류: ${err.message}`;
+          console.error("Geolocation Error: " + err.message);
+      }
+
+      if (navigator.geolocation) {
+          navigator.geolocation.watchPosition(
+              onLocationFound,
+              onLocationError,
+              {
+                  enableHighAccuracy: true,
+                  timeout: 10000,
+                  maximumAge: 0
+              }
+          );
+      } else {
+          document.getElementById('info').innerText = "이 브라우저는 위치 추적을 지원하지 않습니다.";
+      }
+      // ---------------- 현재 위치 추적 끝 ----------------
+
+
+      // ---------------- 클릭 이벤트 ----------------
+      map.on('click', function(e){
+          // (기존 클릭 이벤트 로직 그대로)
+          if (drawingFlood) {
+              floodDrawPoints.push([e.latlng.lat, e.latlng.lng]);
+              if (floodDrawPoints.length > 1) {
+                  if (floodLine) map.removeLayer(floodLine);
+                  floodLine = L.polygon(floodDrawPoints, {color:'blue', fillOpacity:0.3}).addTo(map);
+              }
+          } else if (selectingStart) {
+              if (startPoint) map.removeLayer(startPoint.marker);
+              startPoint = { latlng: e.latlng };
+              startPoint.marker = L.marker(e.latlng, {title:"출발지"}).addTo(map).bindPopup("출발지").openPopup();
+              selectingStart = false;
+              document.getElementById('info').innerText = "출발지 선택 완료.";
+          } else if (selectingEnd) {
+              if (endPoint) map.removeLayer(endPoint.marker);
+              endPoint = { latlng: e.latlng };
+              endPoint.marker = L.marker(e.latlng, {title:"도착지"}).addTo(map).bindPopup("도착지").openPopup();
+              selectingEnd = false;
+              document.getElementById('info').innerText = "도착지 선택 완료.";
+          }
+      });
+    </script>
+  </body>
+</html>
