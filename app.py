@@ -3,6 +3,7 @@ import osmnx as ox
 import networkx as nx
 from shapely.geometry import Polygon, Point
 import json
+import os 
 
 app = Flask(__name__)
 
@@ -17,16 +18,40 @@ from firebase_admin import credentials
 from firebase_admin import db
 import time
 
-cred = credentials.Certificate('floodnavi-f4f2e-firebase-adminsdk-fbsvc-1475fb449d.json')
-firebase_admin.initialize_app(cred, {
-    'databaseURL': 'https://floodnavi-f4f2e-default-rtdb.firebaseio.com/'
-})
-locations_ref = db.reference('locations')
+# cred = credentials.Certificate('floodnavi-f4f2e-firebase-adminsdk-fbsvc-1475fb449d.json')
+# firebase_admin.initialize_app(cred, {
+#     'databaseURL': 'https://floodnavi-f4f2e-default-rtdb.firebaseio.com/'
+# })
+# locations_ref = db.reference('locations')
 
-current_data = locations_ref.get()
-# locations_ref.update( {2 : [37, 127] } )
-if current_data is None:       
-    locations_ref.set({})
+# current_data = locations_ref.get()
+# # locations_ref.update( {2 : [37, 127] } )
+# if current_data is None:       
+#     locations_ref.set({})
+
+cred_json_str = os.environ.get('FIREBASE_CREDENTIALS_JSON')
+
+if cred_json_str:
+    # 2. JSON 문자열을 딕셔너리로 로드
+    cred_dict = json.loads(cred_json_str)
+    
+    # 3. 딕셔너리를 사용하여 인증 정보 객체 생성
+    cred = credentials.Certificate(cred_dict) 
+
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': 'https://floodnavi-f4f2e-default-rtdb.firebaseio.com/'
+    })
+    
+    locations_ref = db.reference('locations')
+    # 최초 실행 시 데이터 초기화 로직 유지
+    if locations_ref.get() is None:
+        locations_ref.set({})
+    
+else:
+    # 배포 환경에서 키가 없으면 앱을 실행할 수 없습니다.
+    raise EnvironmentError("FIREBASE_CREDENTIALS_JSON 환경 변수를 찾을 수 없습니다. (보안 키)")
+
+
 
 # 침수 노드 확인 및 DB업데이트 함수
 def fnodes_update(flood_polygons):    
