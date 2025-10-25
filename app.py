@@ -8,7 +8,7 @@ import os
 app = Flask(__name__)
 
 # 지도와 도로망 설정
-place = "용인시, 대한민국"
+place = "기흥구, 용인시, 대한민국"
 G = ox.graph_from_place(place, network_type="drive")
 nodes = list(G.nodes(data=True))
 
