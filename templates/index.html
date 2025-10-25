@@ -48,7 +48,7 @@
         flex-grow: 1;
         padding: 10px 5px; /* 터치 영역 확대 */
         font-size: 0.9em;
-        min-width: 45%; /* 한 줄에 두 개씩 배치되도록 최소 너비 설정 */
+        min-width: 30%; /* 한 줄에 두 개씩 배치되도록 최소 너비 설정 */
       }
       #info {
         text-align: center;
@@ -66,24 +66,22 @@
       <button id="toggleNodes">노드 표시/숨김</button>
       <button id="setStart">출발지 선택</button>
       <button id="setEnd">도착지 선택</button>
-      <button id="startDrawFlood">침수지역 그리기 시작</button>
-      <button id="endDrawFlood">침수지역 그리기 종료</button>
+      <button id="startDrawFlood">침수지역 그리기</button>
+      <button id="endDrawFlood">침수지역 등록</button>
+      <button id="deleteFlood">침수지역 삭제</button>
       <button id="calculateRoute">경로 계산</button>
     </div>
 
     <p id="info">버튼을 눌러 출발지, 도착지, 또는 침수지역을 선택하세요.</p>
 
     <script>
-        const nodes = {{nodes_json|tojson|safe}};
-        const fnodes = {{fnodes_json|tojson|safe}};
+        // 서버로부터 전체 노드와 침수 노드 받기
+        const nodes = {{nodes_json|tojson|safe}}; // 전체 노드
+        const fnodes = {{fnodes_json|tojson|safe}}; // 침수 노드
 
-        console.log(nodes);
-        console.log(fnodes);
-
-      //   let map = L.map('map').setView([37.5665, 126.9780], 13);
+        //   let map = L.map('map').setView([37.5665, 126.9780], 13);
         let map = L.map('map').setView([37.269043, 127.152716], 13);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-
 
         // ---------------- 노드 표시 ----------------
         let nodeMarkers = [];
@@ -120,7 +118,7 @@
             document.getElementById('info').innerText = "지도에서 도착지를 클릭하세요.";
         };
 
-        // ---------------- 침수지역 그리기 ----------------
+        // ---------------- 침수 지역 그리기 ----------------
         let drawingFlood = false;
         let floodDrawPoints = [];
         let floodLine = null;
@@ -134,6 +132,8 @@
             document.getElementById('info').innerText = "지도 클릭하여 다각형 그리기. 끝내기 버튼으로 완료.";
         };
 
+
+        // ---------------- 침수 노드 등록하기 ----------------
         document.getElementById('endDrawFlood').onclick = function() {
             if (!drawingFlood || floodDrawPoints.length < 3) {
                 alert("점이 3개 이상이어야 합니다.");
@@ -151,6 +151,35 @@
                   document.getElementById('info').innerText = "침수지역 추가 완료.";
               } else {
                   document.getElementById('info').innerText = "침수지역 추가 실패: " + data.error;
+              }
+            })
+            .catch(err => {
+              document.getElementById('info').innerText = "서버와 통신 중 오류 발생.";
+            });
+
+            floodDrawPoints = [];
+            if (floodLine) { map.removeLayer(floodLine); floodLine=null; }
+            drawingFlood = false;
+        };
+
+        // ---------------- 침수 노드 삭제하기 ----------------
+        document.getElementById('deleteFlood').onclick = function() {
+            if (!drawingFlood || floodDrawPoints.length < 3) {
+                alert("점이 3개 이상이어야 합니다.");
+                return;
+            }
+            floodLayers.push(L.polygon(floodDrawPoints, {color:'red', fillOpacity:0.3}).addTo(map));
+            fetch('/del_flood', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify(floodDrawPoints)
+            })
+            .then(res => res.json())
+            .then(data => {
+              if (data.status === 'success') {
+                  document.getElementById('info').innerText = "침수지역 삭제 완료.";
+              } else {
+                  document.getElementById('info').innerText = "침수지역 삭제 실패: " + data.error;
               }
             })
             .catch(err => {
@@ -221,20 +250,22 @@
             });
         };
 
+        // ------------------ 위치 추적 ----------------------
 
         let userLocationMarker = null;
 
-      function onLocationFound(e) {
-          const lat = e.coords.latitude;
-          const lng = e.coords.longitude;
-          const accuracy = e.coords.accuracy;
-          const latlng = [lat, lng];
+        // 위치가 갱신되면 실행되는 함수
+        function onLocationFound(e) {
+            const lat = e.coords.latitude;
+            const lng = e.coords.longitude;
+            const accuracy = e.coords.accuracy;
+            const latlng = [lat, lng];
 
-          if (userLocationMarker) {
-              map.removeLayer(userLocationMarker);
-          }
+            if (userLocationMarker) {
+                map.removeLayer(userLocationMarker);
+            }
 
-          userLocationMarker = L.circleMarker(latlng, {
+            userLocationMarker = L.circleMarker(latlng, {
               radius: 8,
               color: 'blue',
               fillColor: '#00BFFF',
@@ -250,10 +281,11 @@
           console.error("Geolocation Error: " + err.message);
       }
 
-      if (navigator.geolocation) {
-          navigator.geolocation.watchPosition(
-              onLocationFound,
-              onLocationError,
+      // navigator : 브라우저가 제공하는 전역객체
+      if (navigator.geolocation) {                  // 브라우저가 사용자 위치 정보(Geolocation)를 처리하는 기능을 제공하는가?
+          navigator.geolocation.watchPosition(      // watchPosition은 실시간 추적 함수, 한번 호출하면 브라우저가 지속적으로 위치를 추적
+              onLocationFound,                      // 위치가 갱신되면 onLocationFound 함수 실행
+              onLocationError,                      // 위치 추정 중 오류 발생하면 실행되는 함수
               {
                   enableHighAccuracy: true,
                   timeout: 10000,
@@ -263,8 +295,7 @@
       } else {
           document.getElementById('info').innerText = "이 브라우저는 위치 추적을 지원하지 않습니다.";
       }
-      // ---------------- 현재 위치 추적 끝 ----------------
-
+      // ------------------ 위치 추적 끝----------------------
 
       // ---------------- 클릭 이벤트 ----------------
       map.on('click', function(e){

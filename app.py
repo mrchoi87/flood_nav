@@ -8,7 +8,7 @@ import os
 app = Flask(__name__)
 
 # 지도와 도로망 설정
-place = "종로구, 서울특별시, 대한민국"
+place = "용인시, 대한민국"
 G = ox.graph_from_place(place, network_type="drive")
 nodes = list(G.nodes(data=True))
 
@@ -18,79 +18,86 @@ from firebase_admin import credentials
 from firebase_admin import db
 import time
 
-# cred = credentials.Certificate('floodnavi-f4f2e-firebase-adminsdk-fbsvc-1475fb449d.json')
-# firebase_admin.initialize_app(cred, {
-#     'databaseURL': 'https://floodnavi-f4f2e-default-rtdb.firebaseio.com/'
-# })
-# locations_ref = db.reference('locations')
+# 파이어베이스 인증키 - 프로젝트에 포함됨
+cred = credentials.Certificate('floodnavi-f4f2e-firebase-adminsdk-fbsvc-1475fb449d.json')
+# 프로그램과 파이어베이스 db 연결
+firebase_admin.initialize_app(cred, {
+    'databaseURL': 'https://floodnavi-f4f2e-default-rtdb.firebaseio.com/'   # db 경로
+})
 
-# current_data = locations_ref.get()
-# # locations_ref.update( {2 : [37, 127] } )
-# if current_data is None:       
-#     locations_ref.set({})
+# 연결된 db를 참조하는 객체 생성 locations_ref로 db를 사용
+locations_ref = db.reference('locations')   
+# db 데이터 모두 가져오기
+current_data = locations_ref.get()
+if current_data is None:       
+    locations_ref.set({})
 
-cred_json_str = os.environ.get('FIREBASE_CREDENTIALS_JSON')
+# render 서버 업로드 시 활성화하는 코드입니다. 건들지 마시오.
+# cred_json_str = os.environ.get('FIREBASE_CREDENTIALS_JSON')
 
-if cred_json_str:
-    # 2. JSON 문자열을 딕셔너리로 로드
-    cred_dict = json.loads(cred_json_str)
+# if cred_json_str:
+#     # 2. JSON 문자열을 딕셔너리로 로드
+#     cred_dict = json.loads(cred_json_str)
     
-    # 3. 딕셔너리를 사용하여 인증 정보 객체 생성
-    cred = credentials.Certificate(cred_dict) 
+#     # 3. 딕셔너리를 사용하여 인증 정보 객체 생성
+#     cred = credentials.Certificate(cred_dict) 
 
-    firebase_admin.initialize_app(cred, {
-        'databaseURL': 'https://floodnavi-f4f2e-default-rtdb.firebaseio.com/'
-    })
+#     firebase_admin.initialize_app(cred, {
+#         'databaseURL': 'https://floodnavi-f4f2e-default-rtdb.firebaseio.com/'
+#     })
     
-    locations_ref = db.reference('locations')
-    # 최초 실행 시 데이터 초기화 로직 유지
-    if locations_ref.get() is None:
-        locations_ref.set({})
+#     locations_ref = db.reference('locations')
+#     # 최초 실행 시 데이터 초기화 로직 유지
+#     if locations_ref.get() is None:
+#         locations_ref.set({})
     
-else:
-    # 배포 환경에서 키가 없으면 앱을 실행할 수 없습니다.
-    raise EnvironmentError("FIREBASE_CREDENTIALS_JSON 환경 변수를 찾을 수 없습니다. (보안 키)")
+# else:
+#     # 배포 환경에서 키가 없으면 앱을 실행할 수 없습니다.
+#     raise EnvironmentError("FIREBASE_CREDENTIALS_JSON 환경 변수를 찾을 수 없습니다. (보안 키)")
 
 
 
 # 침수 노드 확인 및 DB업데이트 함수
-def fnodes_update(flood_polygons):    
-    # 1. 침수 폴리곤에서 침수 노드 확인
+def fnodes_delete(flood_polygons):    
+    # 선택된 폴리곤에서 노드 확인
     flooded_nodes = []
     for node_id, node_data in G.nodes(data=True):
         pt = Point(node_data['x'], node_data['y'])  # (lon, lat)
-        # print(node_data['x'], node_data['y'])
-        # for poly in flood_polygons:
-        #     if pt.within(poly):        
-        #         flooded_nodes.append( [node_id, node_data['x'], node_data['y']] )
-        #         break
         if pt.within(flood_polygons):
             flooded_nodes.append( [node_id, node_data['y'], node_data['x']] )
 
-    # 2. 침수 노드 파이어베이스 업데이트
-    # # 현재 데이터(값) 읽기
-    # current_data = locations_ref.get()
-    # current_node_ids = list(current_data.keys())    
-    # # id가 포함되지 않았다면 추가하기
-    # for id, x, y in flooded_nodes:
-    #     if id not in current_node_ids:
-    #         locations_ref.update( {id : {x, y}} )
-   
+    # print(flooded_nodes)
+
+    # 파이어베이스에서 key값이 노드 아이디인 데이터 삭제
+    for id, y, x in flooded_nodes:
+        locations_ref.child(str(id)).delete()    
+
+# 침수 노드 DB 등록 함수
+def fnodes_update(flood_polygons):    
+    # 선택된 폴리곤에서 노드 확인
+    flooded_nodes = []
+    for node_id, node_data in G.nodes(data=True):
+        pt = Point(node_data['x'], node_data['y'])  # (lon, lat)
+        if pt.within(flood_polygons):
+            flooded_nodes.append( [node_id, node_data['y'], node_data['x']] )
+    
+    # 파이어베이스에 등록 json 구조 { key : value } -> { 노드 id : [위도, 경도] }
     for id, y, x in flooded_nodes:    
         locations_ref.update( {id : [y, x] } )
 
-# # 침수지역 저장
-# flood_polygons = []
 
 @app.route('/')
 def index():
+    # 전체 노드 정보 담기
     nodes_json = json.dumps([(node_data['y'], node_data['x']) for node_id, node_data in nodes])
 
+    # 파이어베이스에서 침수 노드 정보 가져오기
     current_data = locations_ref.get()
     fnodes_json = json.dumps(list(current_data.values()))
     #db에서 {x,y}를 가져오기
     #json.dumps : dict 객체 -> stirng  
 
+    # 브라우저 전연객체로 전달 nodes_json : 전체 노드 , fnode_json : 침수 노드
     return render_template("index.html", nodes_json=json.loads(nodes_json), fnodes_json=json.loads(fnodes_json) )
 
 @app.route('/add_flood', methods=['POST'])
@@ -105,6 +112,16 @@ def add_flood():
 
     return jsonify(success=True)
 
+@app.route('/del_flood', methods=['POST'])
+def del_flood():
+    data = request.get_json()
+    poly_coords = [(pt[1], pt[0]) for pt in data]
+    poly = Polygon(poly_coords)
+
+    fnodes_delete(poly)
+
+    return jsonify(success=True)
+
 @app.route('/calculate', methods=['POST'])
 def calculate():
     data = request.get_json()
@@ -115,7 +132,7 @@ def calculate():
     start_node = ox.distance.nearest_nodes(G, start[1], start[0])
     end_node = ox.distance.nearest_nodes(G, end[1], end[0])
 
-    # # ✅ 침수지역에 포함된 노드 제거
+    # # 침수지역에 포함된 노드 제거
     # flooded_nodes = []
     # for node_id, node_data in G.nodes(data=True):
     #     pt = Point(node_data['x'], node_data['y'])  # (lon, lat)
