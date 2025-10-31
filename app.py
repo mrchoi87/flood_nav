@@ -7,6 +7,9 @@ import os
 
 app = Flask(__name__)
 
+ox.settings.log_console = True  # 로그를 보기 위해 True로 설정하는 것도 좋습니다.
+ox.settings.timeout = 300       # 300초로 시간 제한 증가
+
 # 지도와 도로망 설정
 place = "기흥구, 용인시, 대한민국"
 G = ox.graph_from_place(place, network_type="drive")
